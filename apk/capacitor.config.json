@@ -1,0 +1,8 @@
+{
+  "appId": "com.m9r1u5.dblabeller",
+  "appName": "DB Labeller",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#15191f"
+  }
+}

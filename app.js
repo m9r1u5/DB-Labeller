@@ -1,7 +1,11 @@
 /* DB Board Labeller — main app */
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const APP_URL = 'https://m9r1u5.github.io/DB-Labeller/';
+const APK_URL = 'https://github.com/m9r1u5/DB-Labeller/releases/latest/download/DB-Labeller.apk';
+// Running inside the Android APK (Capacitor WebView)?
+const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const NP = name => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins[name]) || null;
 
 const DEVICE_TYPES = ['MCB', 'RCD / Earth leakage', 'RCBO', 'Isolator', 'Surge arrester', 'Main switch', 'Other'];
 const DEVICE_SHORT = { 'MCB': 'MCB', 'RCD / Earth leakage': 'RCD', 'RCBO': 'RCBO', 'Isolator': 'Isolator', 'Surge arrester': 'SPD', 'Main switch': 'Main sw', 'Other': 'Other' };
@@ -147,7 +151,45 @@ function downloadBlob(blob, name) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
+function blobToBase64(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+// APK: write the file with the Filesystem plugin, then share or save it
+function fileReadyNative(blob, name, title) {
+  openSheet(
+    '<h3>' + esc(title || 'File ready') + '</h3>' +
+    '<p class="muted small" style="margin-top:-6px">' + esc(name) + ' · ' + Math.max(1, Math.round(blob.size / 1024)) + ' KB</p>' +
+    '<div class="menu-list">' +
+    '<button class="btn primary block" data-a="share">Share / open / print… (WhatsApp, email, Drive, PDF viewer)</button>' +
+    '<button class="btn block" data-a="save">Save to phone (Documents/DB Labeller)</button>' +
+    '<button class="btn block" data-a="close">Close</button></div>',
+    sheet => sheet.addEventListener('click', async e => {
+      const a = e.target.closest('[data-a]'); if (!a) return;
+      const FS = NP('Filesystem'), SH = NP('Share');
+      if (a.dataset.a === 'close') return closeSheet();
+      const done = busy('Preparing file…');
+      try {
+        const data = await blobToBase64(blob);
+        if (a.dataset.a === 'share') {
+          const w = await FS.writeFile({ path: name, data, directory: 'CACHE' });
+          done();
+          try { await SH.share({ title: name, files: [w.uri], dialogTitle: 'Share ' + name }); }
+          catch (err) { if (!/cancel/i.test(err && err.message || '')) toast('Share failed'); }
+        } else {
+          await FS.writeFile({ path: 'DB Labeller/' + name, data, directory: 'DOCUMENTS', recursive: true });
+          done(); toast('Saved to Documents/DB Labeller', 3500);
+        }
+      } catch (err) { done(); alertDlg('Could not save file', (err && err.message || String(err)) + '\nTry Share instead and choose Drive or Files.'); }
+    })
+  );
+}
 function fileReady(blob, name, title) {
+  if (IS_NATIVE && NP('Filesystem') && NP('Share')) return fileReadyNative(blob, name, title);
   const file = new File([blob], name, { type: blob.type });
   const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
   const isPdf = blob.type === 'application/pdf';
@@ -1207,7 +1249,8 @@ async function viewSettings() {
     '<input type="file" id="rsIn" accept=".json,application/json" hidden></div>' +
     '<div class="section-title">App</div><div class="card"><div class="menu-list">' +
     '<button class="btn block" data-app="install">Install app</button><button class="btn block" data-app="update">Check for update</button>' +
-    '<button class="btn block" data-app="share">Share App</button></div>' +
+    '<button class="btn block" data-app="share">Share App</button>' +
+    (IS_NATIVE || isIOS() ? '' : '<button class="btn block" data-app="apk">Download Android APK</button>') + '</div>' +
     '<p style="margin:14px 0 0"><b>DB Board Labeller</b> · version ' + VERSION + '</p><p class="muted small" style="margin:4px 0 0">Works fully offline. No accounts, no servers.</p></div>';
 
   $('#theme').onclick = async e => {
@@ -1249,12 +1292,12 @@ let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; });
 window.addEventListener('appinstalled', () => { deferredPrompt = null; toast('App installed'); });
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isStandalone = () => IS_NATIVE || window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 function bindAppButtons(root) {
   $$('[data-app]', root).forEach(b => {
     if (b.dataset.app === 'install' && isStandalone()) { b.textContent = 'Installed ✓'; b.disabled = true; }
-    b.onclick = () => ({ install: installApp, update: updateApp, share: shareApp })[b.dataset.app]();
+    b.onclick = () => ({ install: installApp, update: updateApp, share: shareApp, apk: () => { location.href = APK_URL; } })[b.dataset.app]();
   });
 }
 async function installApp() {
@@ -1277,7 +1320,26 @@ async function installApp() {
     '<button class="btn primary block" data-x>Got it</button>', s => { $('[data-x]', s).onclick = closeSheet; });
 }
 let reloading = false;
+// Compare two versions like 1.0.10 vs 1.0.9
+function newerVersion(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); }
+  return false;
+}
+async function updateAppNative() {
+  const done = busy('Checking for update…');
+  let latest;
+  try {
+    const r = await fetch(APP_URL + 'version.json?t=' + Date.now(), { cache: 'no-store' });
+    latest = (await r.json()).version;
+  } catch (e) { done(); return toast('Could not check – are you online?'); }
+  done();
+  if (!latest || !newerVersion(latest, VERSION)) return toast('You have the latest version (v' + VERSION + ')');
+  const ok = await confirmDlg('Update available', 'Version ' + latest + ' is available (you have ' + VERSION + ').\n\nThe new APK will download in your browser. Open it and tap Install – your jobs are kept.', 'Download', false);
+  if (ok) location.href = APK_URL;
+}
 async function updateApp() {
+  if (IS_NATIVE) return updateAppNative();
   if (!('serviceWorker' in navigator)) return toast('Updates not supported in this browser');
   const reg = await navigator.serviceWorker.getRegistration();
   if (!reg) { location.reload(); return; }
@@ -1303,6 +1365,11 @@ async function updateApp() {
 async function shareApp() {
   const url = APP_URL;
   const data = { title: 'DB Board Labeller', text: 'Photograph a DB board, tag breakers and print labels + circuit schedules for the COC. Free, works offline:', url };
+  if (IS_NATIVE && NP('Share')) {
+    data.text += ' ' + url + '\nAndroid APK: ' + APK_URL;
+    try { await NP('Share').share({ title: data.title, text: data.text, dialogTitle: 'Share DB Labeller' }); } catch (e) {}
+    return;
+  }
   if (navigator.share) { try { await navigator.share(data); } catch (e) {} return; }
   try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch (e) { alertDlg('Share this link', url); }
 }
@@ -1320,7 +1387,7 @@ document.addEventListener('gesturestart', e => e.preventDefault());
   }
   history.replaceState(null, '');
   render();
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  if (!IS_NATIVE && 'serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
   }
