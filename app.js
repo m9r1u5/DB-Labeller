@@ -1,6 +1,6 @@
 /* DB Board Labeller — main app */
 'use strict';
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const APP_URL = 'https://m9r1u5.github.io/DB-Labeller/';
 const APK_URL = 'https://github.com/m9r1u5/DB-Labeller/releases/latest/download/DB-Labeller.apk';
 // Running inside the Android APK (Capacitor WebView)?
@@ -1413,29 +1413,75 @@ async function updateAppNative() {
   const ok = await confirmDlg('Update available', 'Version ' + latest + ' is available (you have ' + VERSION + ').\n\nThe new APK will download in your browser. Open it and tap Install – your jobs are kept.', 'Download', false);
   if (ok) location.href = APK_URL;
 }
+// Wait for a new service worker to finish installing (or give up after ms)
+function waitForWaiting(reg, ms) {
+  return new Promise(res => {
+    if (reg.waiting) return res(reg.waiting);
+    const t = setTimeout(() => res(reg.waiting || null), ms);
+    const watch = w => {
+      if (!w) return;
+      w.addEventListener('statechange', () => {
+        if (w.state === 'installed') { clearTimeout(t); res(reg.waiting || w); }
+        if (w.state === 'redundant') { clearTimeout(t); res(null); }
+      });
+    };
+    watch(reg.installing);
+    reg.addEventListener('updatefound', () => watch(reg.installing));
+  });
+}
+// Last resort: throw away the cached app files (NOT your jobs) and load fresh from the server
+async function hardRefresh() {
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k.startsWith('db-labeller-')).map(k => caches.delete(k)));
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+  } catch (e) {}
+  reloading = true;
+  location.replace(location.pathname + '?v=' + Date.now() + location.hash);
+}
+async function latestVersion() {
+  const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+  if (!r.ok) throw new Error('server answered ' + r.status);
+  const v = (await r.json()).version;
+  if (!v) throw new Error('no version in version.json');
+  return v;
+}
 async function updateApp() {
   if (IS_NATIVE) return updateAppNative();
-  if (!('serviceWorker' in navigator)) return toast('Updates not supported in this browser');
-  const reg = await navigator.serviceWorker.getRegistration();
-  if (!reg) { location.reload(); return; }
   const done = busy('Checking for update…');
-  try {
-    await reg.update();
-    let w = reg.waiting || reg.installing;
-    if (w && w.state !== 'installed' && w.state !== 'activated') {
-      await new Promise(res => {
-        const t = setTimeout(res, 15000);
-        w.addEventListener('statechange', () => { if (w.state === 'installed' || w.state === 'redundant') { clearTimeout(t); res(); } });
-      });
-      w = reg.waiting;
-    }
+  let latest;
+  try { latest = await latestVersion(); }
+  catch (e) {
     done();
-    if (w && reg.waiting) {
-      toast('Updating…');
-      reg.waiting.postMessage('SKIP_WAITING');
-      setTimeout(() => { if (!reloading) location.reload(); }, 3000);
-    } else toast('You have the latest version (v' + VERSION + ')');
-  } catch (e) { done(); toast('Could not check – are you online?'); }
+    return alertDlg('Could not check for updates', (navigator.onLine === false ? 'This device is offline.' : 'The update server (github.io) could not be reached: ' + e.message + '.') +
+      '\nIf you are on a work network it may be blocking github.io – try on mobile data or another network.');
+  }
+  if (!newerVersion(latest, VERSION)) { done(); return toast('You have the latest version (v' + VERSION + ')'); }
+  try {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) {
+      await reg.update().catch(() => {});
+      const w = await waitForWaiting(reg, 20000);
+      if (w) {
+        done(); toast('Updating to v' + latest + '…');
+        w.postMessage('SKIP_WAITING');
+        setTimeout(() => { if (!reloading) hardRefresh(); }, 4000);
+        return;
+      }
+    }
+  } catch (e) {}
+  done(); toast('Updating to v' + latest + '…');
+  hardRefresh();
+}
+// Show a bar when a new version has downloaded in the background
+function updateBanner(worker) {
+  if ($('#updBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updBar'; bar.className = 'upd-bar';
+  bar.innerHTML = '<span>A new version is ready</span><button class="btn accent small-btn">Update now</button>';
+  bar.querySelector('button').onclick = () => { bar.remove(); worker.postMessage('SKIP_WAITING'); setTimeout(() => { if (!reloading) hardRefresh(); }, 4000); };
+  document.body.appendChild(bar);
 }
 async function shareApp() {
   const url = APP_URL;
@@ -1463,7 +1509,14 @@ document.addEventListener('gesturestart', e => e.preventDefault());
   history.replaceState(null, '');
   render();
   if (!IS_NATIVE && 'serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      const hadController = !!navigator.serviceWorker.controller;
+      if (reg.waiting && hadController) updateBanner(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing;
+        if (w) w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) updateBanner(w); });
+      });
+    }).catch(e => console.warn('SW', e));
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });
   }
 })();

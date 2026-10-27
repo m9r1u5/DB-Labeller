@@ -209,3 +209,8 @@ input.in:focus, select.in:focus, textarea.in:focus { outline: none; border-color
 ol.steps { padding-left: 22px; margin: 0 0 16px; }
 ol.steps li { margin-bottom: 8px; }
 .hidden { display: none !important; }
+.upd-bar {
+  position: fixed; left: 12px; right: 12px; top: calc(var(--hdr) + env(safe-area-inset-top) + 8px); z-index: 70;
+  display: flex; align-items: center; gap: 12px; justify-content: space-between; max-width: 620px; margin: 0 auto;
+  background: var(--text); color: var(--bg); padding: 8px 8px 8px 16px; border-radius: 14px; box-shadow: var(--shadow); font-weight: 700;
+}

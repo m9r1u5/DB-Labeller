@@ -1,7 +1,7 @@
 {
   "name": "db-board-labeller-apk",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Android APK wrapper for DB Board Labeller (built by GitHub Actions)",
   "dependencies": {
     "@capacitor/android": "^6.2.0",

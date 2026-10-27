@@ -17,4 +17,4 @@ Offline PWA for South African electricians. Photograph a distribution board, tap
 Flat repo, no build step. GitHub Pages → Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
 
 ## Releasing an update
-Bump `VERSION` in **both** `app.js` and `sw.js`, commit, and push. Users tap **Update** in the app.
+Bump the version in `app.js`, `sw.js`, `version.json`, `apk/package.json` and the three `?v=` links in `index.html`, then push. GitHub Pages updates the web app and Actions builds a new APK (Releases). Users tap **Update** in the app.
