@@ -1,5 +1,5 @@
 /* DB Board Labeller service worker — bump VERSION on every release */
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const CACHE = 'db-labeller-' + VERSION;
 const FILES = [
   './',

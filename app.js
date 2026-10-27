@@ -1,18 +1,21 @@
 /* DB Board Labeller — main app */
 'use strict';
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const APP_URL = 'https://m9r1u5.github.io/DB-Labeller/';
 const APK_URL = 'https://github.com/m9r1u5/DB-Labeller/releases/latest/download/DB-Labeller.apk';
 // Running inside the Android APK (Capacitor WebView)?
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const NP = name => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins[name]) || null;
 
-const DEVICE_TYPES = ['MCB', 'RCD / Earth leakage', 'RCBO', 'Isolator', 'Surge arrester', 'Main switch', 'Other'];
-const DEVICE_SHORT = { 'MCB': 'MCB', 'RCD / Earth leakage': 'RCD', 'RCBO': 'RCBO', 'Isolator': 'Isolator', 'Surge arrester': 'SPD', 'Main switch': 'Main sw', 'Other': 'Other' };
+const DEVICE_TYPES = ['MCB', 'CB – Circuit breaker', 'RCD / Earth leakage', 'RCBO', 'Isolator', 'Surge arrester', 'Main switch', 'Other'];
+const DEVICE_SHORT = { 'MCB': 'MCB', 'CB – Circuit breaker': 'CB', 'RCD / Earth leakage': 'RCD', 'RCBO': 'RCBO', 'Isolator': 'Isolator', 'Surge arrester': 'SPD', 'Main switch': 'Main sw', 'Other': 'Other' };
 const POLES = ['1P', '2P', '3P', '4P'];
 const CURVES = ['B', 'C', 'D'];
 const RATINGS = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125];
 const MAS = [30, 100, 300, 500];
+// Which fields apply to which device
+const hasCurve = t => /^(MCB|RCBO|CB\b)/.test(t || '');
+const hasMA = t => /RCD|RCBO/.test(t || '');
 const CABLES = ['1.5', '2.5', '4', '6', '10', '16', '25', '35', '50'];
 const DEFAULT_PICKS = ['Lights', 'Plugs', 'Geyser', 'Stove', 'Oven', 'Hob', 'Aircon', 'Pool pump', 'Gate motor',
   'Garage door', 'Borehole', 'Heat pump', 'Underfloor heating', 'Dishwasher', 'Washing machine', 'Tumble dryer',
@@ -95,17 +98,54 @@ function applyTheme() {
 const overlay = () => $('#overlay');
 let sheetStack = [];
 
-function openSheet(html, onMount) {
+function openSheet(html, onMount, opts) {
+  opts = opts || {};
   const scrim = document.createElement('div');
   scrim.className = 'scrim';
-  scrim.innerHTML = '<div class="sheet" role="dialog"><div class="grab"></div>' + html + '</div>';
+  scrim.innerHTML = '<div class="sheet" role="dialog"><div class="sheet-bar" title="Drag to move"><div class="grab"></div>' + (opts.bar || '') + '</div>' + html + '</div>';
   overlay().appendChild(scrim);
   const entry = { el: scrim, onClose: null };
   sheetStack.push(entry);
   history.pushState({ sheet: sheetStack.length }, '');
-  scrim.addEventListener('click', e => { if (e.target === scrim) closeSheet(); });
-  if (onMount) onMount(scrim.querySelector('.sheet'), entry);
+  scrim.addEventListener('click', e => { if (e.target === scrim && !opts.keepOpen) closeSheet(); });
+  const sheet = scrim.querySelector('.sheet');
+  entry.mover = makeSheetMovable(scrim, sheet);
+  if (onMount) onMount(sheet, entry);
   return entry;
+}
+// Drag the sheet's top bar up/down to see what is behind it. Tap the bar to flip between open and tucked away.
+function makeSheetMovable(scrim, sheet) {
+  const bar = sheet.querySelector('.sheet-bar');
+  let dy = 0, drag = null;
+  const maxDy = () => Math.max(0, sheet.offsetHeight - bar.offsetHeight - 14);
+  const setDy = (v, anim) => {
+    dy = Math.max(0, Math.min(maxDy(), v));
+    sheet.style.transition = anim ? 'transform .22s ease' : 'none';
+    sheet.style.transform = dy ? 'translateY(' + dy + 'px)' : '';
+    scrim.classList.toggle('peek', dy > 40);
+    sheet.dispatchEvent(new CustomEvent('sheetmove', { detail: { dy, tucked: dy > 40 } }));
+  };
+  bar.addEventListener('pointerdown', e => {
+    if (e.target.closest('button, a, input, select')) return;
+    drag = { y: e.clientY, dy, moved: false };
+    try { bar.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  bar.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const d = e.clientY - drag.y;
+    if (Math.abs(d) > 6) drag.moved = true;
+    if (drag.moved) setDy(drag.dy + d);
+  });
+  const end = () => {
+    if (!drag) return;
+    if (!drag.moved) setDy(dy > 40 ? 0 : maxDy(), true);
+    drag = null;
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+  // Typing in a field while tucked away brings the form back up
+  sheet.addEventListener('focusin', e => { if (dy > 40 && e.target.matches('input, select, textarea')) setDy(0, true); });
+  return { tuck: () => setDy(maxDy(), true), open: () => setDy(0, true), isTucked: () => dy > 40 };
 }
 function closeSheet() { if (sheetStack.length) history.back(); }
 // Close the top sheet and resolve once the history entry is gone (safe to navigate after)
@@ -283,8 +323,8 @@ function deviceLine(m) {
   if (m.type) p.push(DEVICE_SHORT[m.type] || m.type);
   if (m.rating) p.push(m.rating + 'A');
   if (m.poles) p.push(m.poles);
-  if (m.curve && /MCB|RCBO/.test(m.type)) p.push(m.curve + '-curve');
-  if (m.ma && /RCD|RCBO/.test(m.type)) p.push(m.ma + 'mA');
+  if (m.curve && hasCurve(m.type)) p.push(m.curve + '-curve');
+  if (m.ma && hasMA(m.type)) p.push(m.ma + 'mA');
   if (m.cable) p.push(m.cable + 'mm²');
   if (m.points) p.push(m.points + ' pts');
   return p.join(' · ');
@@ -665,7 +705,7 @@ function circuitForm(board, m, isNew, onSaved) {
   const sel = (name, opts, val, blank) => '<select class="in" name="' + name + '">' + (blank ? '<option value="">' + blank + '</option>' : '') +
     opts.map(o => '<option' + (String(o) === String(val) ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
   let saved = false;
-  const entry = openSheet('<h3>' + (isNew ? 'New circuit' : 'Circuit ' + esc(m.n)) + '</h3><form id="cf" autocomplete="off">' +
+  const entry = openSheet('<form id="cf" autocomplete="off">' +
     '<div class="row2"><label class="f"><span>Circuit no.</span><input class="in" name="n" value="' + esc(m.n) + '" inputmode="text"></label>' +
     '<label class="f"><span>Device type</span>' + sel('type', DEVICE_TYPES, m.type) + '</label></div>' +
     '<label class="f"><span>Description / what it feeds</span><input class="in" name="desc" value="' + esc(m.desc) + '" placeholder="e.g. Kitchen plugs"></label>' +
@@ -686,6 +726,25 @@ function circuitForm(board, m, isNew, onSaved) {
     '<button type="button" class="btn" data-x>Cancel</button><button class="btn primary">Save</button></div></form>',
   (sheet, ent) => {
     const f = $('#cf', sheet);
+    // "View photo": tuck the form down and zoom the photo onto this breaker
+    const peekBtn = $('[data-peek]', sheet);
+    if (peekBtn) {
+      peekBtn.onclick = () => {
+        if (ent.mover.isTucked()) { ent.mover.open(); return; }
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        ent.mover.tuck();
+        const st = $('#stage');
+        if (st) {
+          const hdr = $('header.app').offsetHeight;
+          window.scrollTo({ top: st.getBoundingClientRect().top + window.scrollY - hdr - 6, behavior: 'smooth' });
+          if (currentEditor && m.x != null) setTimeout(() => currentEditor.focusOn(m), 250);
+        }
+      };
+      sheet.addEventListener('sheetmove', e => {
+        peekBtn.textContent = e.detail.tucked ? '📝 Back to form' : '👁 View photo';
+        peekBtn.classList.toggle('accent', e.detail.tucked);
+      });
+    }
     const picksEl = $('#picks', sheet);
     const drawPicks = () => {
       picksEl.innerHTML = '<button type="button" class="chip" data-addp>＋ Save typed</button>' +
@@ -709,14 +768,14 @@ function circuitForm(board, m, isNew, onSaved) {
     });
     const syncType = () => {
       const t = f.type.value;
-      $('#curveF', sheet).style.display = /MCB|RCBO/.test(t) ? '' : 'none';
-      $('#maF', sheet).style.display = /RCD|RCBO/.test(t) ? '' : 'none';
+      $('#curveF', sheet).style.display = hasCurve(t) ? '' : 'none';
+      $('#maF', sheet).style.display = hasMA(t) ? '' : 'none';
     };
     f.type.addEventListener('change', () => {
       const t = f.type.value;
       if (/RCD/.test(t) && !f.ma.value) f.ma.value = '30';
       if (/RCD|Main|Isolator|Surge/.test(t) && f.poles.value === '1P') f.poles.value = '2P';
-      if (/MCB|RCBO/.test(t) && !f.curve.value) f.curve.value = 'C';
+      if (hasCurve(t) && !f.curve.value) f.curve.value = 'C';
       syncType();
     });
     syncType();
@@ -739,8 +798,8 @@ function circuitForm(board, m, isNew, onSaved) {
       }
       m.n = newN;
       ['desc', 'type', 'rating', 'poles', 'curve', 'ma', 'cable', 'points', 'notes', 'modules', 'row'].forEach(k => { m[k] = String(f[k].value || '').trim(); });
-      if (!/MCB|RCBO/.test(m.type)) m.curve = '';
-      if (!/RCD|RCBO/.test(m.type)) m.ma = '';
+      if (!hasCurve(m.type)) m.curve = '';
+      if (!hasMA(m.type)) m.ma = '';
       saved = true; closeSheet(); onSaved();
     });
     ent.onClose = () => {
@@ -748,6 +807,11 @@ function circuitForm(board, m, isNew, onSaved) {
       if (isNew && !saved) { board.markers = board.markers.filter(x => x.id !== m.id); onSaved(); }
     };
     if (isNew) setTimeout(() => f.desc.focus({ preventScroll: true }), 300);
+  }, {
+    keepOpen: true,
+    bar: '<div class="bar-row"><h3>' + (isNew ? 'New circuit' : 'Circuit ' + esc(m.n)) + '</h3>' +
+      (board.photo ? '<button type="button" class="btn small-btn" data-peek>👁 View photo</button>' : '') + '</div>' +
+      (board.photo ? '<div class="muted small bar-tip">Drag this bar or tap “View photo” to see the board behind</div>' : '')
   });
   return entry;
 }
@@ -797,6 +861,16 @@ class BoardEditor {
     ns = this.clampS(ns);
     const ix = (px - this.tx) / this.s, iy = (py - this.ty) / this.s;
     this.s = ns; this.tx = px - ix * ns; this.ty = py - iy * ns; this.apply();
+  }
+  // Zoom in on a marker and centre it in the photo window
+  focusOn(m) {
+    if (!this.W || m.x == null) return;
+    const r = this.stage.getBoundingClientRect();
+    const ns = this.clampS(Math.max(this.s, this.fitS * 2.5));
+    this.layer.style.transition = 'transform .25s ease';
+    this.s = ns; this.tx = r.width / 2 - m.x * this.W * ns; this.ty = r.height / 2 - m.y * this.H * ns;
+    this.apply();
+    setTimeout(() => { this.layer.style.transition = ''; }, 300);
   }
   zoomBy(f) { const r = this.stage.getBoundingClientRect(); this.zoomAt(r.width / 2, r.height / 2, this.s * f); }
   wheel(e) { e.preventDefault(); const p = this.local(e); this.zoomAt(p.x, p.y, this.s * (e.deltaY < 0 ? 1.15 : 1 / 1.15)); }
@@ -871,6 +945,7 @@ class BoardEditor {
     if (e.type === 'pointercancel') return;
     if (g.dragged) { this.cb.onMoved(); return; }
     if (g.moved || g.multi || Date.now() - g.t0 > 700) return;
+    if (sheetStack.length) return; // a form is open over the photo: only pan/zoom
     if (g.mk) {
       const m = this.board.markers.find(x => x.id === g.mk);
       if (m) { this.drawMarkers(m.id); this.cb.onOpen(m); }

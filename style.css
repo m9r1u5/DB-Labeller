@@ -173,7 +173,18 @@ input.in:focus, select.in:focus, textarea.in:focus { outline: none; border-color
   border-radius: 20px 20px 0 0; padding: 8px 16px calc(18px + env(safe-area-inset-bottom));
   animation: up .18s ease-out;
 }
-.sheet .grab { width: 44px; height: 5px; border-radius: 3px; background: var(--border); margin: 4px auto 10px; }
+.sheet .grab { width: 54px; height: 6px; border-radius: 3px; background: var(--muted); margin: 2px auto 8px; opacity: .7; }
+.sheet-bar {
+  position: sticky; top: -8px; z-index: 3; margin: -8px -16px 6px; padding: 8px 16px 6px;
+  background: var(--surface); touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
+  border-radius: 20px 20px 0 0;
+}
+.sheet-bar .bar-row { display: flex; align-items: center; gap: 10px; }
+.sheet-bar .bar-row h3 { flex: 1; margin: 0; }
+.sheet-bar .bar-tip { margin-top: 2px; }
+.small-btn { min-height: 44px; padding: 6px 14px; font-size: 15px; white-space: nowrap; }
+.scrim.peek { background: transparent; pointer-events: none; }
+.scrim.peek .sheet { pointer-events: auto; box-shadow: 0 -4px 18px rgba(0,0,0,.35); }
 .sheet h3 { margin: 4px 0 14px; font-size: 20px; }
 .sheet .actions { display: flex; gap: 10px; position: sticky; bottom: calc(-18px - env(safe-area-inset-bottom)); background: var(--surface); padding: 12px 0 4px; }
 .sheet .actions .btn { flex: 1; }
